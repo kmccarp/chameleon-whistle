@@ -1,0 +1,108 @@
+name: Release
+
+# Builds the shareable zip and publishes it as a GitHub Release.
+# Triggered by pushing a version tag (e.g. v1.0.0), or manually.
+#
+# CI cannot rebuild the mod containers from scratch - that step needs the game
+# installed, to extract the stock SoundWave. So dist/ is committed, and this
+# workflow only assembles and publishes the package.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version label for a manual build (e.g. v1.0.1)'
+        required: false
+        default: 'dev'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: ver
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fetch retoc (checksum verified)
+        run: bash src/fetch_tools.sh
+
+      - name: Sanity-check the committed mod containers
+        run: |
+          fail=0
+          for v in dist/*/; do
+            name=$(basename "$v")
+            for ext in pak ucas utoc; do
+              f="$v/zzz_ChameleonYell_P.$ext"
+              if [ ! -s "$f" ]; then echo "missing or empty: $f"; fail=1; fi
+            done
+          done
+          # every variant must ship all three files, and the previews must exist
+          [ "$(ls -1 dist | wc -l)" -ge 1 ] || { echo "dist/ is empty"; fail=1; }
+          ls previews/*.wav >/dev/null 2>&1 || { echo "no previews"; fail=1; }
+          exit $fail
+
+      - name: Build package
+        run: bash src/make_package.sh "${{ steps.ver.outputs.version }}"
+
+      - name: Verify the zip is well formed
+        run: |
+          ZIP="MecchaChameleon-LowFreqYell-${{ steps.ver.outputs.version }}.zip"
+          python3 - "$ZIP" <<'PY'
+          import sys, zipfile
+          z = zipfile.ZipFile(sys.argv[1])
+          bad = z.testzip()
+          assert bad is None, "corrupt entry: %s" % bad
+          names = z.namelist()
+          required = ['INSTALL.bat', 'UNINSTALL.bat', 'README.txt',
+                      'install.ps1', 'uninstall.ps1', 'find_game.ps1', 'CHECKSUMS.txt']
+          missing = [r for r in required if r not in names]
+          assert not missing, "missing from zip: %s" % missing
+          assert any(n.startswith('mods/') for n in names), "no mods/ in zip"
+          assert any(n.startswith('previews/') for n in names), "no previews/ in zip"
+          print("zip OK: %d entries" % len(names))
+          PY
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          ZIP="MecchaChameleon-LowFreqYell-${VERSION}.zip"
+          NOTES=$(cat <<'EOF'
+          Sound mod for MECCHA CHAMELEON: replaces the wolf-whistle taunt with a
+          yell pitched down so nearly all its energy sits below 750 Hz, making it
+          audible to players with high-frequency hearing loss.
+
+          **Install:** unzip, quit the game, double-click `INSTALL.bat`, pick a yell.
+          No Python, no admin rights. `UNINSTALL.bat` reverts it.
+
+          Purely additive - it writes three new `zzz_ChameleonYell_P.*` files and
+          never modifies a stock game file.
+
+          Four variants included (energy below 750 Hz):
+          `A_male_scream` 95.7% - `B_hey_call` 91.8% - `C_wilhelm` 88.2% - `D_death_scream` 86.1%
+          (stock wolf whistle, for comparison: ~2%)
+
+          All audio is public domain (CC0). See `README.txt` in the zip.
+          EOF
+          )
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" "$ZIP" --clobber
+          else
+            gh release create "$VERSION" "$ZIP" \
+              --title "Low-Frequency Yell Taunt $VERSION" \
+              --notes "$NOTES"
+          fi

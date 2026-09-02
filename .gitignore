@@ -1,0 +1,22 @@
+# Stock game assets extracted from the local install at build time.
+# Never commit these - they are game data, and they are regenerable.
+/original/
+
+# Build intermediates and the assembled package staging dir
+/build/
+/package/
+
+# Release artifacts (the workflow builds these)
+*.zip
+
+# Fetched third-party binaries - src/fetch_tools.sh downloads + verifies retoc,
+# which in turn pulls the proprietary Oodle DLL it needs to read game containers.
+# Neither is ours to redistribute, and both are regenerable.
+/tools/
+
+# Python
+__pycache__/
+*.pyc
+
+# Extracted copies of a release zip (inspection leftovers)
+/MecchaChameleon-LowFreqYell-*/
